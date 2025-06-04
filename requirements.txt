@@ -1,0 +1,6 @@
+Flask==3.0.2
+requests==2.31.0
+beautifulsoup4==4.12.3
+pillow==10.2.0
+imageio==2.33.1
+gunicorn==21.2.0
