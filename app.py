@@ -1,4 +1,5 @@
 from flask import Flask, send_file, jsonify
+from flask_cors import CORS
 import requests
 from PIL import Image
 import imageio.v2 as imageio  # Use imageio.v2 for compatibility
@@ -6,6 +7,7 @@ import io
 from datetime import datetime
 from bs4 import BeautifulSoup
 app = Flask(__name__)
+CORS(app)
 
 # Generate direct image URLs for forecast frames
 def generate_smoke_urls(runtime: str, domain='NC', frames=19):
