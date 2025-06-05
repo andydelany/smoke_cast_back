@@ -1,13 +1,11 @@
-from flask import Flask, send_file, jsonify
-from flask_cors import CORS
 import requests
 from PIL import Image
-import imageio.v2 as imageio  # Use imageio.v2 for compatibility
+import imageio.v2 as imageio
 import io
 from datetime import datetime
 from bs4 import BeautifulSoup
-app = Flask(__name__)
-CORS(app)
+import os
+import argparse
 
 # Generate direct image URLs for forecast frames
 def generate_smoke_urls(runtime: str, domain='NC', frames=19):
@@ -42,35 +40,38 @@ def get_latest_runtime():
     except ValueError as e:
         raise ValueError(f"Could not parse run_time option text '{text}': {e}")
 
-@app.route('/generate-gif')
-def generate_gif():
-    try:
-        runtime = get_latest_runtime()
-    except Exception as e:
-        return jsonify({"error": f"Failed to fetch latest runtime: {str(e)}"}), 500
+# Download images and create a GIF
+def generate_forecast_gif(domain='NC', frames=19):
+    print("Fetching latest available runtime...")
+    runtime = get_latest_runtime()
+    print(f"Latest runtime: {runtime}")
 
-    urls = generate_smoke_urls(runtime)
+    urls = generate_smoke_urls(runtime, domain=domain, frames=frames)
 
     images = []
     for url in urls:
         try:
-            img_response = requests.get(url)
-            img_response.raise_for_status()
-            img = Image.open(io.BytesIO(img_response.content)).convert("RGB")
+            print(f"Downloading: {url}")
+            response = requests.get(url)
+            response.raise_for_status()
+            img = Image.open(io.BytesIO(response.content)).convert("RGB")
             images.append(img)
         except Exception as e:
             print(f"Error fetching image from {url}: {e}")
 
     if not images:
-        return jsonify({"error": "No images found."}), 500
+        print("No images were downloaded. Aborting GIF generation.")
+        return
 
-    gif_bytes = io.BytesIO()
-    imageio.mimsave(gif_bytes, images, format='GIF', duration=0.5)
-    gif_bytes.seek(0)
+    output_filename = f"forecast_{domain}_{runtime}.gif"
+    print(f"Saving GIF to {output_filename}")
+    imageio.mimsave(output_filename, images, format='GIF', duration=0.5)
+    print("GIF generation complete.")
 
-    return send_file(gif_bytes, mimetype='image/gif', download_name='forecast.gif')
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Generate HRRR Smoke Forecast GIF")
+    parser.add_argument("domain", nargs="?", default="NC", help="Domain to use (e.g., NC, full, etc.)")
+    parser.add_argument("frames", nargs="?", type=int, default=19, help="Number of forecast frames (default 19)")
+    args = parser.parse_args()
 
-if __name__ == '__main__':
-    import os
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    generate_forecast_gif(domain=args.domain, frames=args.frames)
