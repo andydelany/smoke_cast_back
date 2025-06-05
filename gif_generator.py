@@ -4,7 +4,6 @@ import imageio.v2 as imageio
 import io
 from datetime import datetime
 from bs4 import BeautifulSoup
-import os
 import argparse
 
 # Generate direct image URLs for forecast frames
@@ -18,6 +17,17 @@ def generate_smoke_urls(runtime: str, domain='NC', frames=19):
         url = f"{base_url}/{plot_prefix}_{fcst}.png"
         urls.append(url)
     return urls
+
+# Generate the referer URL for the forecast frame
+def generate_referer_url(runtime: str, domain:str, fcst:int):
+    fcst_str = f"{fcst:03d}"
+    referer = (
+        f"https://rapidrefresh.noaa.gov/hrrr/HRRRsmoke/displayMapUpdated.cgi?"
+        f"keys=hrrr_ncep_smoke_jet:&runtime={runtime}"
+        f"&plot_type=trc1_{domain}_sfc&fcst={fcst_str}&time_inc=60&num_times=49&model=hrrr"
+        f"&ptitle=HRRR-Smoke%20Graphics&maxFcstLen=48&fcstStrLen=-1&domain={domain}&adtfn=1"
+    )
+    return referer
 
 # Scrape the latest available runtime from the welcome page and convert to required format
 def get_latest_runtime():
@@ -48,16 +58,39 @@ def generate_forecast_gif(domain='NC', frames=19):
 
     urls = generate_smoke_urls(runtime, domain=domain, frames=frames)
 
+    # Create a session to maintain cookies and state
+    session = requests.Session()
+    
     images = []
-    for url in urls:
+    for i, url in enumerate(urls):
+        referer = generate_referer_url(runtime, domain=domain, fcst=i)
+        headers = {
+            "Referer": referer, 
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        }
         try:
+            # First, visit the referer page to establish session
+            print(f"Establishing session with referer: {referer}")
+            session.get(referer, headers=headers)
+            
             print(f"Downloading: {url}")
-            response = requests.get(url)
-            response.raise_for_status()
-            img = Image.open(io.BytesIO(response.content)).convert("RGB")
-            images.append(img)
+            response = session.get(url, headers=headers)
+            if response.status_code != 200:
+                print(f"Error: Got status code {response.status_code} for {url}")
+                break
+            content_type = response.headers.get("Content-Type", "")
+            if "image" not in content_type:
+                print(f"Unexpected content type for {url}: {content_type}")
+                break
+            try:
+                img = Image.open(io.BytesIO(response.content)).convert("RGB")
+                images.append(img)
+            except Exception as img_err:
+                print(f"Error decoding image from {url}: {img_err}")
+                break
         except Exception as e:
             print(f"Error fetching image from {url}: {e}")
+            break
 
     if not images:
         print("No images were downloaded. Aborting GIF generation.")
