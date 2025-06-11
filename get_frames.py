@@ -2,9 +2,14 @@ import requests
 from PIL import Image
 import imageio.v2 as imageio
 import io
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
 import argparse
+import os
+import shutil
+import pytz
+import json
+
 
 # Generate direct image URLs for forecast frames
 def generate_smoke_urls(runtime: str, domain='NC', frames=19):
@@ -50,8 +55,43 @@ def get_latest_runtime():
     except ValueError as e:
         raise ValueError(f"Could not parse run_time option text '{text}': {e}")
 
-# Download images and create a GIF
-def generate_forecast_gif(domain='NC', frames=19):
+def utc_to_central(utc_dt):
+    # Convert naive datetime in UTC to Central Time with daylight savings handled
+    utc = pytz.utc
+    central = pytz.timezone("US/Central")
+    utc_dt = utc.localize(utc_dt)
+    central_dt = utc_dt.astimezone(central)
+    return central_dt.strftime("%Y-%m-%d %H:%M %Z")
+
+def generate_forecast_metadata(runtime, frames, domain):
+    base_dt = datetime.strptime(runtime, "%Y%m%d%H")  # runtime start datetime UTC
+    metadata = []
+    for i in range(frames):
+        frame_time_utc = base_dt + timedelta(hours=i)
+        frame_time_central = utc_to_central(frame_time_utc)
+        metadata.append({
+            "frame_index": i,
+            "time_utc": frame_time_utc.strftime("%Y-%m-%d %H:%M UTC"),
+            "time_central": frame_time_central,
+            "filename": f"frame_{i:03d}.png"
+        })
+    return metadata
+
+def cleanup_old_runs(base_dir, domain,keep_after_date):
+    for folder in os.listdir(base_dir):
+        folder_path = os.path.join(base_dir, folder)
+        if os.path.isdir(folder_path):
+            try:
+                folder_datetime = datetime.strptime(folder, f"frames_{domain}_%Y%m%d%H")
+                if folder_datetime < keep_after_date:
+                    print(f"Deleting old folder: {folder}")
+                    shutil.rmtree(folder_path)
+            except ValueError:
+                # Skip folders that don't match the expected naming pattern
+                continue
+
+# Download images and create a GIF or frames
+def generate_forecast(domain='NC', frames=19, output_type = "frames"):
     print("Fetching latest available runtime...")
     runtime = get_latest_runtime()
     print(f"Latest runtime: {runtime}")
@@ -96,15 +136,35 @@ def generate_forecast_gif(domain='NC', frames=19):
         print("No images were downloaded. Aborting GIF generation.")
         return
 
-    output_filename = f"forecast_{domain}_{runtime}.gif"
-    print(f"Saving GIF to {output_filename}")
-    imageio.mimsave(output_filename, images, format='GIF', duration=0.5)
-    print("GIF generation complete.")
+    metadata = generate_forecast_metadata(runtime, frames, domain)
+    output_filename = f"finishedGIFS/forecast_{domain}_{runtime}.gif"
+    output_folder = f"frames/frames_{domain}_{runtime}"
+
+    if output_type == 'gif':
+        print(f"Saving GIF to {output_filename}")
+        imageio.mimsave(output_filename, images, format='GIF', duration=1, loop=0)
+        print("GIF generation complete.")
+    elif output_type == 'frames':
+        os.makedirs(output_folder, exist_ok=True)
+        print(f"Saving individual frames to {output_folder}/")
+        for idx, img in enumerate(images):
+            img.save(os.path.join(output_folder, f"frame_{idx:03d}.png"))
+        print("Frame saving complete.")
+        with open(os.path.join(output_folder, "metadata.json"), "w") as f:
+            json.dump(metadata, f, indent=2)
+        shutil.rmtree(f"frames/latest_{domain}", ignore_errors=True)
+        shutil.copytree(output_folder, f"frames/latest_{domain}")
+        keep_after = datetime.now(timezone.utc) - timedelta(days=1)
+        cleanup_old_runs(output_folder, domain, keep_after)
+    else:
+        print(f"Unknown output_type: {output_type}. Must be 'gif' or 'frames'.")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate HRRR Smoke Forecast GIF")
     parser.add_argument("domain", nargs="?", default="NC", help="Domain to use (e.g., NC, full, etc.)")
     parser.add_argument("frames", nargs="?", type=int, default=19, help="Number of forecast frames (default 19)")
+    parser.add_argument("--output", dest="output_type", choices=["gif", "frames"], default="frames", help="Output type: gif or frames")
     args = parser.parse_args()
 
-    generate_forecast_gif(domain=args.domain, frames=args.frames)
+    generate_forecast(domain=args.domain, frames=args.frames, output_type=args.output_type)

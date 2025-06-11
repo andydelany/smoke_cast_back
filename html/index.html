@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Forecast Viewer</title>
+  <style>
+    body { font-family: sans-serif; background: #f5f5f5; text-align: center; padding: 2rem; }
+    #frame { max-width: 90%; border: 1px solid #ccc; }
+    .controls { margin-top: 1rem; }
+    .slider-container { 
+      width: 80%; 
+      margin: 2rem auto; 
+      position: relative;
+    }
+    #timeSlider {
+      width: 100%;
+      margin: 1rem 0;
+    }
+    .time-labels {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 0.5rem;
+      font-size: 0.9rem;
+      color: #666;
+    }
+    .playback-controls {
+      margin-top: 1rem;
+    }
+    button { 
+      margin: 0 0.5rem; 
+      padding: 0.5rem 1rem; 
+      font-size: 1rem;
+      background: #4CAF50;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #45a049;
+    }
+  </style>
+</head>
+<body>
+  <h1>Smoke Forecast</h1>
+  <img id="frame" src="http://localhost:8000/frames/latest_NC/frame_000.png" alt="Forecast Frame" />
+
+  <div class="slider-container">
+    <input type="range" id="timeSlider" min="0" max="18" value="0" step="1">
+    <div class="time-labels" id="timeLabels"></div>
+  </div>
+  <div class="controls" style="text-align: center;">
+    <select id="domainSelect" onchange="changeDomain()">
+    <option value="NC">NC</option>
+    <option value="full">Full</option>
+  </select>
+</div>
+  <div class="playback-controls">
+    <button id="play">Play</button>
+    <button id="pause">Pause</button>
+    <label for="domainSelect">Select Domain:</label>
+  </div>
+
+  <script>
+    const totalFrames = 19;
+    const frameDelay = 250;
+    let currentFrame = 0;
+    let playing = false;
+    let interval = null;
+    let domain = "NC";
+    let metadata = null;
+
+    const frameImg = document.getElementById("frame");
+    const timeSlider = document.getElementById("timeSlider");
+    const timeLabels = document.getElementById("timeLabels");
+
+    function formatTime(dateStr) {
+      const date = new Date(dateStr);
+      return date.toLocaleString('en-US', { 
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+    }
+
+    function updateTimeLabels() {
+      if (!metadata) return;
+      
+      timeLabels.innerHTML = '';
+      const step = Math.max(1, Math.floor(totalFrames / 5));
+      
+      for (let i = 0; i < totalFrames; i += step) {
+        const frameData = metadata.find(m => m.frame_index === i);
+        if (frameData) {
+          const label = document.createElement('div');
+          label.textContent = formatTime(frameData.time_central);
+          timeLabels.appendChild(label);
+        }
+      }
+    }
+
+    async function loadMetadata() {
+      try {
+        const response = await fetch(`http://localhost:8000/frames/latest_${domain}/metadata.json`);
+        metadata = await response.json();
+        updateTimeLabels();
+      } catch (error) {
+        console.error('Error loading metadata:', error);
+        metadata = null;
+      }
+    }
+
+    function updateFrame() {
+      const frameNumber = String(currentFrame).padStart(3, '0');
+      frameImg.src = `http://localhost:8000/frames/latest_${domain}/frame_${frameNumber}.png`;
+      timeSlider.value = currentFrame;
+    }
+
+    function play() {
+      if (playing) return;
+      playing = true;
+      interval = setInterval(() => {
+        currentFrame = (currentFrame + 1) % totalFrames;
+        updateFrame();
+      }, frameDelay);
+    }
+
+    function pause() {
+      playing = false;
+      clearInterval(interval);
+    }
+
+    timeSlider.oninput = function() {
+      pause();
+      currentFrame = parseInt(this.value);
+      updateFrame();
+    };
+
+    document.getElementById("play").onclick = play;
+    document.getElementById("pause").onclick = pause;
+
+    async function changeDomain() {
+      domain = document.getElementById("domainSelect").value;
+      currentFrame = 0;
+      await loadMetadata();
+      updateFrame();
+    }
+
+    // Initial load
+    loadMetadata().then(updateFrame);
+  </script>
+</body>
+</html>
