@@ -63,7 +63,7 @@ def utc_to_central(utc_dt):
     central_dt = utc_dt.astimezone(central)
     return central_dt.strftime("%Y-%m-%d %H:%M %Z")
 
-def generate_forecast_metadata(runtime, frames, domain):
+def generate_forecast_metadata(runtime, frames):
     base_dt = datetime.strptime(runtime, "%Y%m%d%H")  # runtime start datetime UTC
     metadata = []
     for i in range(frames):
@@ -77,24 +77,58 @@ def generate_forecast_metadata(runtime, frames, domain):
         })
     return metadata
 
-def cleanup_old_runs(base_dir, domain,keep_after_date):
+def cleanup_old_frame_folders(base_dir, domain, keep_after_date):
     for folder in os.listdir(base_dir):
         folder_path = os.path.join(base_dir, folder)
         if os.path.isdir(folder_path):
             try:
                 folder_datetime = datetime.strptime(folder, f"frames_{domain}_%Y%m%d%H")
-                if folder_datetime < keep_after_date:
+                folder_datetime = pytz.utc.localize(folder_datetime)
+                keep_after_utc = keep_after_date.astimezone(pytz.utc)
+                if folder_datetime < keep_after_utc:
                     print(f"Deleting old folder: {folder}")
                     shutil.rmtree(folder_path)
             except ValueError:
                 # Skip folders that don't match the expected naming pattern
                 continue
 
+def cleanup_old_gifs(base_dir, domain, keep_after_date):
+    for gif in os.listdir(base_dir):
+        gif_path = os.path.join(base_dir, gif)
+        if os.path.isfile(gif_path):
+            try:
+                gif_datetime = datetime.strptime(gif, f"forecast_{domain}_%Y%m%d%H.gif")
+                if gif_datetime < keep_after_date:
+                    print(f"Deleting old GIF: {gif}")
+                    os.remove(gif_path)
+            except ValueError:
+                # Skip files that don't match the expected naming pattern
+                continue
+
+def create_symlink(source, link_name):
+    # Always try to remove existing path (rmdir will handle it gracefully if nothing exists)
+    print(f"Ensuring clean path for: {link_name}")
+    os.system(f'rmdir /S /Q "{link_name}" 2>nul')
+    
+    # Create new junction point
+    result = os.system(f'mklink /J "{link_name}" "{source}"')
+    if result == 0:
+        print(f"Created symlink: {link_name} -> {source}")
+    else:
+        print(f"Failed to create symlink: {link_name} -> {source}")
+
+
 # Download images and create a GIF or frames
-def generate_forecast(domain='NC', frames=19, output_type = "frames"):
-    print("Fetching latest available runtime...")
-    runtime = get_latest_runtime()
-    print(f"Latest runtime: {runtime}")
+def generate_forecast(domain='NC', frames=19, output_type = "frames", runtime=None):
+    if runtime is None:
+        print("Fetching latest available runtime...")
+        runtime = get_latest_runtime()
+        print(f"Latest runtime: {runtime}")
+
+    if runtime.endswith("00") or runtime.endswith("06") or runtime.endswith("12") or runtime.endswith("18"):
+        frames = 49
+    else:
+        frames = 19
 
     urls = generate_smoke_urls(runtime, domain=domain, frames=frames)
 
@@ -136,26 +170,31 @@ def generate_forecast(domain='NC', frames=19, output_type = "frames"):
         print("No images were downloaded. Aborting GIF generation.")
         return
 
-    metadata = generate_forecast_metadata(runtime, frames, domain)
-    output_filename = f"finishedGIFS/forecast_{domain}_{runtime}.gif"
-    output_folder = f"frames/frames_{domain}_{runtime}"
+    metadata = generate_forecast_metadata(runtime, frames)
+    
+    gif_filename = f"finishedGIFS/forecast_{domain}_{runtime}.gif"
+    frames_folder = f"frames/frames_{domain}_{runtime}"
 
     if output_type == 'gif':
-        print(f"Saving GIF to {output_filename}")
-        imageio.mimsave(output_filename, images, format='GIF', duration=1, loop=0)
+        print(f"Saving GIF to {gif_filename}")
+        imageio.mimsave(gif_filename, images, format='GIF', duration=1, loop=0)
         print("GIF generation complete.")
-    elif output_type == 'frames':
-        os.makedirs(output_folder, exist_ok=True)
-        print(f"Saving individual frames to {output_folder}/")
-        for idx, img in enumerate(images):
-            img.save(os.path.join(output_folder, f"frame_{idx:03d}.png"))
-        print("Frame saving complete.")
-        with open(os.path.join(output_folder, "metadata.json"), "w") as f:
-            json.dump(metadata, f, indent=2)
-        shutil.rmtree(f"frames/latest_{domain}", ignore_errors=True)
-        shutil.copytree(output_folder, f"frames/latest_{domain}")
         keep_after = datetime.now(timezone.utc) - timedelta(days=1)
-        cleanup_old_runs(output_folder, domain, keep_after)
+        cleanup_old_gifs("finishedGIFS", domain, keep_after)
+    elif output_type == 'frames':
+        os.makedirs(frames_folder, exist_ok=True)
+        for idx, img in enumerate(images):
+            img.save(os.path.join(frames_folder, f"frame_{idx:03d}.png"))
+        print("Frame saving complete.")
+        with open(os.path.join(frames_folder, "metadata.json"), "w") as f:
+            json.dump(metadata, f, indent=2)
+        latest_link = f"frames/latest_{domain}"
+        create_symlink(frames_folder, latest_link)
+        if frames == 49:
+            latest_48_link = f"frames/latest_{domain}_48hr"
+            create_symlink(frames_folder, latest_48_link)
+        keep_after = datetime.now(timezone.utc) - timedelta(days=1)
+        cleanup_old_frame_folders("frames", domain, keep_after)
     else:
         print(f"Unknown output_type: {output_type}. Must be 'gif' or 'frames'.")
 
@@ -165,6 +204,7 @@ if __name__ == "__main__":
     parser.add_argument("domain", nargs="?", default="NC", help="Domain to use (e.g., NC, full, etc.)")
     parser.add_argument("frames", nargs="?", type=int, default=19, help="Number of forecast frames (default 19)")
     parser.add_argument("--output", dest="output_type", choices=["gif", "frames"], default="frames", help="Output type: gif or frames")
+    parser.add_argument("--runtime", dest="runtime", help="Runtime to use (YYYYMMDDHH)")
     args = parser.parse_args()
 
-    generate_forecast(domain=args.domain, frames=args.frames, output_type=args.output_type)
+    generate_forecast(domain=args.domain, frames=args.frames, output_type=args.output_type, runtime=args.runtime)

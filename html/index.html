@@ -1,22 +1,62 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Forecast Viewer</title>
   <style>
-    body { font-family: sans-serif; background: #f5f5f5; text-align: center; padding: 2rem; }
-    #frame { max-width: 90%; border: 1px solid #ccc; }
-    .controls { margin-top: 1rem; }
-    .slider-container { 
-      width: 80%; 
-      margin: 2rem auto; 
-      position: relative;
+    body {
+      font-family: 'Helvetica Neue', sans-serif;
+      background: #f5f5f5;
+      text-align: center;
+      padding: 2rem;
     }
+
+    #frame {
+      max-width: 90%;
+      border: 1px solid #ccc;
+    }
+
+    .controls {
+      margin: 0.5rem 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 2rem;
+    }
+
+    .control-group {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .controls label {
+      font-size: 1rem;
+      font-weight: bold;
+      color: #333;
+    }
+
+    .slider-container {
+      width: 90%;
+      max-width: 800px;
+      margin: 2rem auto;
+      position: relative;
+      display: flex;
+      align-items: flex-start;
+      gap: 1rem;
+    }
+
+    .slider-wrapper {
+      flex: 1;
+    }
+
     #timeSlider {
       width: 100%;
       margin: 1rem 0;
     }
+
     .time-labels {
       display: flex;
       justify-content: space-between;
@@ -24,12 +64,10 @@
       font-size: 0.9rem;
       color: #666;
     }
-    .playback-controls {
-      margin-top: 1rem;
-    }
-    button { 
-      margin: 0 0.5rem; 
-      padding: 0.5rem 1rem; 
+
+    button {
+      margin: 0 0.5rem;
+      padding: 0.5rem 1rem;
       font-size: 1rem;
       background: #4CAF50;
       color: white;
@@ -37,47 +75,83 @@
       border-radius: 4px;
       cursor: pointer;
     }
+
     button:hover {
       background: #45a049;
     }
+
+    select {
+      font-size: 1rem;
+
+    }
+
+    #playPause {
+      width: 3rem;
+      min-width: 3rem;
+      margin: 1rem 0;
+      flex-shrink: 0;
+    }
   </style>
 </head>
-<body>
-  <h1>Smoke Forecast</h1>
-  <img id="frame" src="http://localhost:8000/frames/latest_NC/frame_000.png" alt="Forecast Frame" />
 
-  <div class="slider-container">
-    <input type="range" id="timeSlider" min="0" max="18" value="0" step="1">
-    <div class="time-labels" id="timeLabels"></div>
-  </div>
+<body>
+  <h1 style="font-style: italic; font-kerning: calc(1rem); font-weight: bolder;">Smoke Forecast</h1>
+  <img id="frame" src="http://localhost:8000/frames/latest_NC/frame_000.png" alt="Forecast Frame" />
   <div class="controls" style="text-align: center;">
-    <select id="domainSelect" onchange="changeDomain()">
-    <option value="NC">NC</option>
-    <option value="full">Full</option>
-  </select>
-</div>
-  <div class="playback-controls">
-    <button id="play">Play</button>
-    <button id="pause">Pause</button>
-    <label for="domainSelect">Select Domain:</label>
+    <div class="control-group">
+      <label for="domainSelect">Domain:</label>
+      <select id="domainSelect" onchange="changeDomain()">
+        <option value="NC">North Central U.S.</option>
+        <option value="full">Continental U.S.</option>
+      </select>
+    </div>
+    <div class="control-group">
+      <label for="runtimeSelect">Runtime:</label>
+      <select id="runtimeSelect" onchange="changeRuntime()">
+        <option value="">Latest</option>
+        <option value="_48hr">Latest 48hr</option>
+      </select>
+      <span id="currentTime" style="font-size: 1rem;"></span>
+    </div>
+  </div>
+  <div class="slider-container">
+    <button id="playPause">▶</button>
+    <div class="slider-wrapper">
+      <input type="range" id="timeSlider" min="0" max="49" value="0" step="1">
+      <div class="time-labels" id="timeLabels"></div>
+    </div>
   </div>
 
   <script>
-    const totalFrames = 19;
-    const frameDelay = 250;
+    const frameDelay = 200;
     let currentFrame = 0;
     let playing = false;
     let interval = null;
     let domain = "NC";
+    let runtime = "";  // Default to regular latest
     let metadata = null;
+    let totalFrames = 0;  // Will be set dynamically from metadata
 
     const frameImg = document.getElementById("frame");
     const timeSlider = document.getElementById("timeSlider");
     const timeLabels = document.getElementById("timeLabels");
 
-    function formatTime(dateStr) {
+    function formatRuntime(dateStr) {
       const date = new Date(dateStr);
-      return date.toLocaleString('en-US', { 
+      return date.toLocaleString('en-US', {
+        weekday: 'short',
+        day: 'numeric',
+        month: 'short',
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+    }
+
+    function formatTimeLabels(dateStr) {
+      const date = new Date(dateStr);
+      return date.toLocaleString('en-US', {
+        weekday: 'short',
         hour: 'numeric',
         minute: '2-digit',
         hour12: true
@@ -86,40 +160,49 @@
 
     function updateTimeLabels() {
       if (!metadata) return;
-      
+
       timeLabels.innerHTML = '';
       const step = Math.max(1, Math.floor(totalFrames / 5));
-      
+
       for (let i = 0; i < totalFrames; i += step) {
         const frameData = metadata.find(m => m.frame_index === i);
         if (frameData) {
           const label = document.createElement('div');
-          label.textContent = formatTime(frameData.time_central);
+          label.textContent = formatTimeLabels(frameData.time_central);
           timeLabels.appendChild(label);
         }
       }
     }
 
-    async function loadMetadata() {
-      try {
-        const response = await fetch(`http://localhost:8000/frames/latest_${domain}/metadata.json`);
-        metadata = await response.json();
-        updateTimeLabels();
-      } catch (error) {
-        console.error('Error loading metadata:', error);
-        metadata = null;
+    function updateCurrentTime() {
+      const currentTimeSpan = document.getElementById("currentTime");
+      if (metadata && metadata[0]) {
+        // Show the runtime (start time) from frame 000
+        const currentTime = formatRuntime(metadata[0].time_central);
+        currentTimeSpan.textContent = currentTime;
+      } else {
+        currentTimeSpan.textContent = "";
       }
     }
 
     function updateFrame() {
       const frameNumber = String(currentFrame).padStart(3, '0');
-      frameImg.src = `http://localhost:8000/frames/latest_${domain}/frame_${frameNumber}.png`;
+      frameImg.src = `http://localhost:8000/frames/latest_${domain}${runtime}/frame_${frameNumber}.png`;
       timeSlider.value = currentFrame;
+    }
+
+    function togglePlayPause() {
+      if (playing) {
+        pause();
+      } else {
+        play();
+      }
     }
 
     function play() {
       if (playing) return;
       playing = true;
+      document.getElementById("playPause").textContent = "⏸";
       interval = setInterval(() => {
         currentFrame = (currentFrame + 1) % totalFrames;
         updateFrame();
@@ -128,17 +211,17 @@
 
     function pause() {
       playing = false;
+      document.getElementById("playPause").textContent = "▶";
       clearInterval(interval);
     }
 
-    timeSlider.oninput = function() {
+    timeSlider.oninput = function () {
       pause();
       currentFrame = parseInt(this.value);
       updateFrame();
     };
 
-    document.getElementById("play").onclick = play;
-    document.getElementById("pause").onclick = pause;
+    document.getElementById("playPause").onclick = togglePlayPause;
 
     async function changeDomain() {
       domain = document.getElementById("domainSelect").value;
@@ -147,8 +230,30 @@
       updateFrame();
     }
 
+    async function changeRuntime() {
+      runtime = document.getElementById("runtimeSelect").value;
+      currentFrame = 0;
+      await loadMetadata();
+      updateFrame();
+    }
+
+    async function loadMetadata() {
+      try {
+        const response = await fetch(`http://localhost:8000/frames/latest_${domain}${runtime}/metadata.json`);
+        metadata = await response.json();
+        totalFrames = metadata.length;  // Set total frames based on metadata length
+        timeSlider.max = totalFrames - 1;  // Update slider max value
+        updateTimeLabels();
+        updateCurrentTime(); // Update runtime display when metadata loads
+      } catch (error) {
+        console.error('Error loading metadata:', error);
+        metadata = null;
+      }
+    }
+
     // Initial load
     loadMetadata().then(updateFrame);
   </script>
 </body>
+
 </html>
