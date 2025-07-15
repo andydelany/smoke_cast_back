@@ -8,9 +8,10 @@
   <style>
     body {
       font-family: 'Helvetica Neue', sans-serif;
+      font-size: 1rem;
       background: #f5f5f5;
       text-align: center;
-      padding: 2rem;
+      padding: 0;
     }
 
     #frame {
@@ -18,12 +19,29 @@
       border: 1px solid #ccc;
     }
 
+    h1 {
+      font-size: 2rem;
+      font-weight: bold;
+      color: #333;
+      margin: 0;
+    }
+
+    .viewer {
+      display: flex;
+      align-items: start;
+      justify-content: center;
+      gap: 1rem;
+      size: 100vw;
+    }
+
     .controls {
       margin: 0.5rem 0;
+      padding: 2rem;
       display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 2rem;
+      flex-direction: column;
+      gap: 1rem;
+      border: 1px solid blue;
+      border-radius: 2rem;
     }
 
     .control-group {
@@ -41,10 +59,10 @@
     .slider-container {
       width: 90%;
       max-width: 800px;
-      margin: 2rem auto;
+      margin: .5rem auto;
       position: relative;
       display: flex;
-      align-items: flex-start;
+      align-items: center;
       gap: 1rem;
     }
 
@@ -88,40 +106,58 @@
     #playPause {
       width: 3rem;
       min-width: 3rem;
-      margin: 1rem 0;
       flex-shrink: 0;
+    }
+
+    .time-overlay {
+      position: absolute;
+      top: 7%;
+      right: 10%;
+      padding: 0.3em 0.8em;
+      font-size: 1rem;
+      font-weight: bold;
+      pointer-events: none;
+      z-index: 2;
     }
   </style>
 </head>
 
 <body>
-  <h1 style="font-style: italic; font-kerning: calc(1rem); font-weight: bolder;">Smoke Forecast</h1>
-  <img id="frame" src="http://localhost:8000/frames/latest_NC/frame_000.png" alt="Forecast Frame" />
-  <div class="controls" style="text-align: center;">
-    <div class="control-group">
-      <label for="domainSelect">Domain:</label>
-      <select id="domainSelect" onchange="changeDomain()">
-        <option value="NC">North Central U.S.</option>
-        <option value="full">Continental U.S.</option>
-      </select>
+  <div class="viewer">
+    <div>
+      <div style="position: relative; display: inline-block;">
+        <img id="frame" src="http://localhost:8000/frames/latest_NC/frame_000.png" alt="Forecast Frame" />
+        <div id="currentTimeLabel" class="time-overlay"></div>
+      </div>
+      <div class="slider-container">
+        <button id="playPause">▶</button>
+        <div class="slider-wrapper">
+          <input type="range" id="timeSlider" min="0" max="49" value="0" step="1">
+        </div>
+      </div>
     </div>
-    <div class="control-group">
-      <label for="runtimeSelect">Runtime:</label>
-      <select id="runtimeSelect" onchange="changeRuntime()">
-        <option value="">Latest</option>
-        <option value="_48hr">Latest 48hr</option>
-      </select>
-      <span id="currentTime" style="font-size: 1rem;"></span>
+    <div class="controls" style="text-align: center;">
+      <h1>smoke bummer :(</h1>
+      <p style="font-size: .75rem; margin: 0;">images coming from <a
+          href="https://rapidrefresh.noaa.gov/hrrr/HRRRsmoke/">NOAA HRRR smoke forecast
+          model</a></p>
+      <div class="control-group">
+        <label for="domainSelect">Domain:</label>
+        <select id="domainSelect" onchange="changeDomain()">
+          <option value="NC">North Central U.S.</option>
+          <option value="full">Continental U.S.</option>
+        </select>
+      </div>
+      <div class="control-group">
+        <label for="runtimeSelect">Runtime:</label>
+        <select id="runtimeSelect" onchange="changeRuntime()">
+          <option value="">Latest</option>
+          <option value="_48hr">Latest 48hr</option>
+        </select>
+        <span id="currentTime" style="font-size: .75rem;"></span>
+      </div>
     </div>
   </div>
-  <div class="slider-container">
-    <button id="playPause">▶</button>
-    <div class="slider-wrapper">
-      <input type="range" id="timeSlider" min="0" max="49" value="0" step="1">
-      <div class="time-labels" id="timeLabels"></div>
-    </div>
-  </div>
-
   <script>
     const frameDelay = 200;
     let currentFrame = 0;
@@ -134,7 +170,7 @@
 
     const frameImg = document.getElementById("frame");
     const timeSlider = document.getElementById("timeSlider");
-    const timeLabels = document.getElementById("timeLabels");
+    const currentTimeLabel = document.getElementById("currentTimeLabel");
 
     function formatRuntime(dateStr) {
       const date = new Date(dateStr);
@@ -158,19 +194,13 @@
       });
     }
 
-    function updateTimeLabels() {
-      if (!metadata) return;
-
-      timeLabels.innerHTML = '';
-      const step = Math.max(1, Math.floor(totalFrames / 5));
-
-      for (let i = 0; i < totalFrames; i += step) {
-        const frameData = metadata.find(m => m.frame_index === i);
-        if (frameData) {
-          const label = document.createElement('div');
-          label.textContent = formatTimeLabels(frameData.time_central);
-          timeLabels.appendChild(label);
-        }
+    function updateCurrentTimeLabel() {
+      if (metadata && metadata[currentFrame]) {
+        const frameData = metadata[currentFrame];
+        const timeStr = `${formatTimeLabels(frameData.time_central)} CST`;
+        currentTimeLabel.textContent = timeStr;
+      } else {
+        currentTimeLabel.textContent = "";
       }
     }
 
@@ -189,6 +219,7 @@
       const frameNumber = String(currentFrame).padStart(3, '0');
       frameImg.src = `http://localhost:8000/frames/latest_${domain}${runtime}/frame_${frameNumber}.png`;
       timeSlider.value = currentFrame;
+      updateCurrentTimeLabel();
     }
 
     function togglePlayPause() {
@@ -243,8 +274,8 @@
         metadata = await response.json();
         totalFrames = metadata.length;  // Set total frames based on metadata length
         timeSlider.max = totalFrames - 1;  // Update slider max value
-        updateTimeLabels();
-        updateCurrentTime(); // Update runtime display when metadata loads
+        updateCurrentTimeLabel();
+        updateCurrentTime();
       } catch (error) {
         console.error('Error loading metadata:', error);
         metadata = null;
