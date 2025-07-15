@@ -59,6 +59,17 @@ def get_latest_runtime():
         raise ValueError(f"Could not parse run_time option text '{text}': {e}")
 
 
+def get_latest_48hr_runtime(runtime: str) -> str:
+    """
+    Given a runtime string (YYYYMMDDHH), return the same runtime if it ends with 00, 06, 12, or 18,
+    otherwise return the same date with the most recent lower valid hour.
+    """
+    valid_hours = [0, 6, 12, 18]
+    hour = int(runtime[-2:])
+    latest = max(h for h in valid_hours if h <= hour)
+    return runtime[:-2] + f"{latest:02d}"
+
+
 def utc_to_central(utc_dt):
     # Convert naive datetime in UTC to Central Time with daylight savings handled
     utc = pytz.utc
@@ -107,6 +118,7 @@ def cleanup_old_gifs(base_dir, domain, keep_after_date):
         if os.path.isfile(gif_path):
             try:
                 gif_datetime = datetime.strptime(gif, f"forecast_{domain}_%Y%m%d%H.gif")
+                gif_datetime = pytz.utc.localize(gif_datetime)
                 if gif_datetime < keep_after_date:
                     print(f"Deleting old GIF: {gif}")
                     os.remove(gif_path)
@@ -129,22 +141,8 @@ def create_symlink(source, link_name):
 
 
 # Download images and create a GIF or frames
-def generate_forecast(domain="NC", frames=19, output_type="frames", runtime=None):
-    if runtime is None:
-        print("Fetching latest available runtime...")
-        runtime = get_latest_runtime()
-        print(f"Latest runtime: {runtime}")
-
-    if (
-        runtime.endswith("00")
-        or runtime.endswith("06")
-        or runtime.endswith("12")
-        or runtime.endswith("18")
-    ):
-        frames = 49
-    else:
-        frames = 19
-
+def fetch_images(domain, frames, runtime):
+    """Core function to fetch images from URLs"""
     urls = generate_smoke_urls(runtime, domain=domain, frames=frames)
 
     # Create a session to maintain cookies and state
@@ -182,36 +180,86 @@ def generate_forecast(domain="NC", frames=19, output_type="frames", runtime=None
             break
 
     if not images:
-        print("No images were downloaded. Aborting GIF generation.")
-        return
+        print("No images were downloaded.")
+        return None
+
+    return images
+
+
+def generate_gif(domain, frames, runtime):
+    """Generate GIF from fetched images"""
+    gif_filename = f"finishedGIFS/forecast_{domain}_{runtime}.gif"
+
+    # Check if output already exists
+    if os.path.exists(gif_filename):
+        print(f"GIF already exists: {gif_filename}")
+        return gif_filename
+
+    images = fetch_images(domain, frames, runtime)
+    if images is None:
+        return None
+
+    print(f"Saving GIF to {gif_filename}")
+    imageio.mimsave(gif_filename, images, format="GIF", duration=1, loop=0)
+    print("GIF generation complete.")
+    return gif_filename
+
+
+def generate_frames(domain, frames, runtime):
+    """Generate frames from fetched images"""
+    frames_folder = f"frames/frames_{domain}_{runtime}"
+
+    # Check if output already exists
+    if os.path.exists(frames_folder):
+        print(f"Frames folder already exists: {frames_folder}")
+        return frames_folder
+
+    images = fetch_images(domain, frames, runtime)
+    if images is None:
+        return None
 
     metadata = generate_forecast_metadata(runtime, frames)
 
-    gif_filename = f"finishedGIFS/forecast_{domain}_{runtime}.gif"
-    frames_folder = f"frames/frames_{domain}_{runtime}"
+    os.makedirs(frames_folder, exist_ok=True)
+    for idx, img in enumerate(images):
+        img.save(os.path.join(frames_folder, f"frame_{idx:03d}.png"))
+    print("Frame saving complete.")
+
+    with open(os.path.join(frames_folder, "metadata.json"), "w") as f:
+        json.dump(metadata, f, indent=2)
+
+    return frames_folder
+
+
+def generate_forecast(domain="NC", output_type="frames"):
+    print("Fetching latest available runtime...")
+    runtime = get_latest_runtime()
+    print(f"Latest runtime: {runtime}")
+
+    latest_48hr_runtime = get_latest_48hr_runtime(runtime)
+    latest_is_48hr = runtime == latest_48hr_runtime
+    frames = 49 if latest_is_48hr else 19
 
     if output_type == "gif":
-        print(f"Saving GIF to {gif_filename}")
-        imageio.mimsave(gif_filename, images, format="GIF", duration=1, loop=0)
-        print("GIF generation complete.")
-        keep_after = datetime.now(timezone.utc) - timedelta(days=1)
-        cleanup_old_gifs("finishedGIFS", domain, keep_after)
+        generate_gif(domain, frames, runtime)
     elif output_type == "frames":
-        os.makedirs(frames_folder, exist_ok=True)
-        for idx, img in enumerate(images):
-            img.save(os.path.join(frames_folder, f"frame_{idx:03d}.png"))
-        print("Frame saving complete.")
-        with open(os.path.join(frames_folder, "metadata.json"), "w") as f:
-            json.dump(metadata, f, indent=2)
+        frames_folder = generate_frames(domain, frames, runtime)
         latest_link = f"frames/latest_{domain}"
         create_symlink(frames_folder, latest_link)
-        if frames == 49:
-            latest_48_link = f"frames/latest_{domain}_48hr"
+        latest_48_link = f"frames/latest_{domain}_48hr"
+        if latest_is_48hr:
             create_symlink(frames_folder, latest_48_link)
-        keep_after = datetime.now(timezone.utc) - timedelta(days=1)
-        cleanup_old_frame_folders("frames", domain, keep_after)
+        else:
+            frames_48_folder = generate_frames(domain, 49, latest_48hr_runtime)
+            create_symlink(frames_48_folder, latest_48_link)
     else:
         print(f"Unknown output_type: {output_type}. Must be 'gif' or 'frames'.")
+        return None
+
+    # Clean up old GIFs and frames
+    keep_after = datetime.now(timezone.utc) - timedelta(days=1)
+    cleanup_old_gifs("finishedGIFS", domain, keep_after)
+    cleanup_old_frame_folders("frames", domain, keep_after)
 
 
 if __name__ == "__main__":
@@ -238,7 +286,5 @@ if __name__ == "__main__":
 
     generate_forecast(
         domain=args.domain,
-        frames=args.frames,
         output_type=args.output_type,
-        runtime=args.runtime,
     )
